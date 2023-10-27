@@ -1,0 +1,340 @@
+---
+title: A Visual Investigation into Life for People with Disabilities, With Specific Focus
+  on Ambulatory Disabilities
+author: "Caleb Henning"
+date: "June 20, 2023"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(haven)
+library(tidyverse)
+library(descr)
+require(maps)
+require(mapproj)
+require(scales)
+```
+
+
+```{r, results=FALSE, echo=F, warning=F}
+#dataset set-up 
+setwd("~/Desktop/Folder/University/Work/Summer 23 TA")
+load("~/Desktop/Folder/University/Work/Summer 23 TA/disability.RData")
+
+#subsetting
+var_keep <- c("spid", "r11dresid",'r5dgender',"rl5dracehisp","r11d2intvrage","re11dcensdiv","hc11health",
+              "hc11hosptstay","hc11depresan2","hh11dmarstat","sn11dnumsn","md11canewlker",
+              "ss11heringaid","ss11glasseswr","cg11ratememry","hp11mthlymort", 
+              "hp11amtstlowe","hp11homevalue","ia11totinc")
+
+sub<- disability[,var_keep]
+
+#variables I want to have: 
+#age,location,gender,economic well-being,health,disability,income/homevalue/mortgage
+
+#research focus: looking at how disability works with all of these factors, creating graphs, maps, etc. 
+
+#### DATA MANAGEMENT #####
+#residential status, collapsing 2, 3 and 7 into one response, 4, 5 and 8 into one response 
+sub$resstat <- as.numeric(sub$r11dresid)
+sub$resstat[sub$r11dresid==1] <- "Community"
+sub$resstat[sub$r11dresid==6] <- "Deceased" 
+sub$resstat[sub$r11dresid %in% c(2,3,7)] <- "Residential Care"
+sub$resstat[sub$r11dresid %in% c(4,5,8)] <- "Nursing Home"
+
+#adding labels to gender variable
+sub$r5dgender <- as.numeric(sub$r5dgender)
+sub <- sub %>% 
+  mutate(gender = recode(r5dgender, `2` = 'Female', `1`= "Male"))
+
+#race/hispanic variable, removing DK/RF response, adding labels
+sub$rl5dracehisp <- as.numeric(sub$rl5dracehisp)
+sub <- sub %>% 
+  mutate(race = recode(rl5dracehisp, `1`="White, non-Hispanic", `2`="Black, non-Hispanic",
+                       `3` = "Other, non-Hispanic", `4` = "Hispanic"))
+
+#age, removing missing values and labelling
+sub$r11d2intvrage <- as.numeric(sub$r11d2intvrage)
+sub <- sub %>% 
+  mutate(age = recode(r11d2intvrage, `2`="70-74", `3`="75-79",
+                       `4` = "80-84", `5` = "85-89", `6`="90+"))
+
+#region/census division, labelling (check codebook for specific states)
+#note: create another variable for making these into states later on for map making
+sub$re11dcensdiv <- as.numeric(sub$re11dcensdiv)
+sub <- sub %>% 
+  mutate(state = recode(re11dcensdiv, `1`="New England", `2`="Middle Atlantic", `3` = "East North Central",
+                       `4` = "West North Central", `5` = "South Atlantic", 
+                       `6`="East South Central", `7`="West South Central", `8`="Mountain", `9`='Pacific'))
+
+#health status, removing NAs, adding labels to solve scale issue
+sub$hc11health <- as.numeric(sub$hc11health)
+sub <- sub %>% 
+  mutate(health = recode(hc11health, `1`=5, `2`=4, `3`=3,
+                       `4`=2, `5` =1))
+sub$health[sub$health==-1|sub$health==-8|sub$health==-9] <- NA
+
+#hospital stay in the last 12 months, removing NAs (higher score means not being in the hospital)
+sub$hc11hosptstay <- as.numeric(sub$hc11hosptstay)
+sub <- sub %>% 
+  mutate(hosptstay = recode(hc11hosptstay, `1`=0,`2`=1))
+sub$hosptstay[sub$hosptstay==-1|sub$hosptstay==-8|sub$hosptstay==-9] <- NA
+
+#depressed/down (higher scores mean not sad for the calculations later)
+sub$hc11depresan2 <- as.numeric(sub$hc11depresan2)
+sub <- sub %>% 
+  mutate(sad = recode(hc11depresan2, `1`=3, `2`=2,
+                       `3` = 1, `4` = 0))
+sub$sad[sub$sad==-1|sub$sad==-8|sub$sad==-9|sub$sad==-7] <- NA
+
+#combining depression, hospital stay and health status into an overall health score
+#higher score, better health overall (mental & physical)
+sub$overallhealth <- sub$sad + sub$hosptstay + sub$health 
+
+#marital status 
+sub$hh11dmarstat <- as.numeric(sub$hh11dmarstat)
+sub <- sub %>% 
+  mutate(marital = recode(hh11dmarstat, `1`="Married",`2`="Living with partner", `3`="Separated",
+                       `4` = "Divorced", `5` = "Widowed", `6`="Never married"))
+
+#how many in social network 
+sub$sn11dnumsn <- as.numeric(sub$sn11dnumsn)
+sub$social <- sub$sn11dnumsn
+sub$social[sub$social==-1] <- NA
+
+#adding social and marital for an overall social score
+sub <- sub %>% 
+  mutate(marnum=ifelse(marital=="Married"|marital=="Living with partner",1,0))
+sub$company <- sub$social + sub$marnum
+
+#removing missing from cane/walker/wheelchair, creating ambulatory disability variable
+sub$md11canewlker[sub$md11canewlker==-1|sub$md11canewlker==-8|sub$md11canewlker==-9] <- NA
+sub <- sub %>% 
+  mutate(ambulatory=ifelse(md11canewlker==1,1,0))
+
+#removing missing from hearing aid, creating hearing disability variable
+sub$ss11heringaid[sub$ss11heringaid==-1|sub$ss11heringaid==-9] <- NA
+sub <- sub %>% 
+  mutate(hearing=ifelse(ss11heringaid==1|ss11heringaid==7, 1,0))
+
+#glasses, creating visual disability variable
+sub$ss11glasseswr[sub$ss11glasseswr==-1|sub$ss11glasseswr==-8|sub$ss11glasseswr==-9] <- NA
+sub <- sub %>% 
+  mutate(vision=ifelse(ss11glasseswr==7|ss11glasseswr==1,1,0))
+
+#memory, memory issues variable
+sub$cg11ratememry <- as.numeric(sub$cg11ratememry)
+sub <- sub %>% 
+  mutate(memory = recode(cg11ratememry, `1`=5, `2`=4, `3`=3,
+                       `4`=2, `5` =1))
+sub$memory[sub$memory==-1|sub$memory==-8|sub$memory==-9] <- NA
+
+#monthly mortgage payment amount, for renters only
+sub$mortgage <- sub$hp11mthlymort
+sub$mortgage[sub$hp11mthlymort==-1|sub$hp11mthlymort==-8|sub$hp11mthlymort==-9|sub$hp11mthlymort==-7] <- NA
+
+#mortgage amount still owed
+sub$mortgageowed <- sub$hp11amtstlowe
+sub$mortgageowed[sub$hp11amtstlowe==-1|sub$hp11amtstlowe==-8|
+                   sub$hp11amtstlowe==-9|sub$hp11amtstlowe==-7] <- NA
+
+#value of home, for owners
+sub$home <- sub$hp11homevalue
+sub$home[sub$hp11homevalue==-1|sub$hp11homevalue==-8|
+                   sub$hp11homevalue==-9|sub$hp11homevalue==-7] <- NA
+
+#income 
+sub$income <- sub$ia11totinc
+sub$income[sub$ia11totinc==-1|sub$ia11totinc==-8|
+                   sub$ia11totinc==-9|sub$ia11totinc==-7] <- NA
+
+```
+
+### Prevalance of Disability by Type and Gender
+
+```{r, echo=F, warning=F, message=F}
+#making a variable for which disability people have
+sub$disability <- NA
+sub$disability[sub$hearing==0 & sub$vision==0 & sub$ambulatory==0] <- 0 
+sub$disability[sub$ambulatory==1] <- 1
+sub$disability[sub$hearing==1] <- 2
+sub$disability[sub$vision==1] <- 3
+sub$disability[sub$vision==1 & sub$ambulatory ==1] <- 4
+sub$disability[sub$vision ==1 & sub$hearing == 1 ] <- 4
+sub$disability[sub$ambulatory == 1 & sub$hearing ==1 ] <- 4
+sub$disability <- as.numeric(sub$disability)
+
+trying <- sub %>% 
+  group_by(gender, disability) %>% 
+  summarize(n = n()) %>% 
+  mutate(freq = n/sum(n)) %>% 
+  na.omit
+
+trying$disability <- as.factor(trying$disability)
+levels(trying$disability) <- c("None", "Ambulatory", "Hearing", "Impaired Vision", "Multiple")
+
+sub$disability <- as.factor(sub$disability)
+levels(sub$disability) <- c("None", "Ambulatory", "Hearing", "Impaired Vision", "Multiple")
+
+
+ggplot(data=subset(trying, !is.na(disability)))+
+  geom_col(aes(x=gender, y=freq, fill=factor(disability)), position="dodge2")+
+  labs(x="Sex", y="Percent of Sample")+
+  scale_fill_brewer("Type of Disability", palette = "PuBuGn")+
+  theme_minimal()+
+  scale_y_continuous(labels=scales::percent)
+
+```
+
+### Quality of Life by Disability 
+
+```{r, echo=F, warning=F}
+sub$qualityoflife <- sub$company + sub$overallhealth
+
+sub$disability <- as.factor(sub$disability)
+levels(sub$disability) <- c("None", "Ambulatory", "Hearing", "Impaired Vision", "Multiple")
+
+ggplot(data=subset(sub, !is.na(disability)))+
+  geom_boxplot(aes(x=disability, y=qualityoflife, fill=disability), na.rm=T)+
+  geom_jitter(aes(x=disability, y=qualityoflife, color=disability), na.rm=T, alpha=.2)+
+  scale_fill_brewer ("Disability", palette = "PuBuGn")+
+  scale_color_brewer(palette="PuBuGn")+
+  theme_minimal()+
+  theme(legend.position="none")+
+  labs(x="Type of Disability", y="Quality of Life", caption="Quality of life scored out of 15, measures health and social life")
+
+```
+
+### Ambulatory Disabilities by State 
+
+```{r, warning=F, echo=F}
+all_states<-map_data("state")
+
+#figure out how to do this in a shiny app instead maybe
+#creating states variable based on region given in the dataset, this might not work 
+#idea: collapse the dataset into aggregates by region, duplicate each aggregate into each state needed
+test <- sub %>% 
+  group_by(state) %>% 
+  summarize(avg = mean(ambulatory, na.rm=T))
+
+duptimes <- c(5,4,3,8,6,5,9,7,4)
+idx <- rep(1:nrow(test), duptimes)
+test <- test[idx,]
+
+region=c("ohio","indiana","illinois","michigan","wisconsin",
+         "kentucky","tennessee","alabama","mississippi",
+         "new jersey","new york","pennsylvania",
+         "idaho","colorado","wyoming","montana","new mexico","arizona","utah","nevada",
+         "connecticut", "rhode island","new hampshire", "vermont","maine","massachusetts",
+         "washington","oregon","california","alaska","hawaii",
+         "florida","georgia","north carolina","south carolina","west virginia","virginia",
+         "district of colomubia","maryland","delaware",
+         "minnesota","iowa","north dakota","south dakota","kansas","nebraska","missouri",
+         "texas","oklahoma","louisiana","arkansas")
+
+test <- cbind(test, region)
+
+#creating the map 
+ggplot()+ 
+  geom_map(data=all_states,aes(map_id=region),map=all_states)+ 
+  geom_map(data=test,aes(map_id=region, fill=avg),map=all_states, boundary=F, col="darkgray")+
+  expand_limits(x=all_states$long,y=all_states$lat)+ 
+  scale_fill_distiller("Proportion of \nAmbulatory Disabilities",palette="PuBuGn", direction=1)+
+  coord_map("albers",lat0=30,lat1=40)+
+  labs(x="", y="")+
+  theme_minimal()+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(), 
+        axis.text.y=element_blank(),  
+        axis.ticks.y=element_blank())
+
+```
+
+### Marital Status, Residential Status, and Presence of Ambulatory Disability
+
+
+```{r, echo=F, warning=F, message=F, results=F}
+#bar graph with living situation based on presence/absence of ambulatory disabilities, faceted by marriage 
+#or faceted by disability? 
+
+#data management 
+sub %>% 
+  group_by(ambulatory, resstat, marital) %>% 
+  summarize(n = n()) %>% 
+  mutate(freq = n/sum(n)) %>% 
+  na.omit -> whatif
+
+whatif$ambulatory <- factor(whatif$ambulatory)
+levels(whatif$ambulatory) <- c("No Ambulatory Disability", "Ambulatory Disability")
+
+whatif$resstat <- factor(whatif$resstat)
+levels(whatif$resstat) <- c("Community", "Nursing \nHome", "Residential \nCare")
+
+ggplot(whatif)+
+  geom_col(aes(x=resstat, y=freq, fill=marital))+
+  facet_grid(~ambulatory)+
+  scale_fill_brewer("Marital Status", palette = "PuBuGn")+
+  scale_y_continuous(labels=scales::percent)+
+  labs(x="Residential Status", y="Percent of Sample")+
+  theme_minimal()
+
+```
+
+### Race/Ethnicity, Presence of Ambulatory Disability, and Home Value
+
+```{r, echo=F, warning=F, message=F}
+#tile plot for ambulatory, race, home value 
+#work on a better color palette for this that is more in line with the rest of the project
+
+#data management
+sub%>% 
+  filter(home > 0)%>% 
+  group_by(ambulatory,race)%>% 
+  summarise(avg=mean(home)) %>% 
+  na.omit -> tile.plot
+
+tile.plot$ambulatory <- factor(tile.plot$ambulatory)
+levels(tile.plot$ambulatory) <-c("No", "Yes")
+
+tile.plot$race <- factor(tile.plot$race)
+levels(tile.plot$race) <- c("Black, \nnon,Hispanic", "Hispanic", 
+                            "Other, \nnon-Hispanic", "White, \nnon-Hispanic")
+
+#graph 
+ggplot(tile.plot)+ 
+  geom_tile(aes(x=factor(race, level=c('White, \nnon-Hispanic' , 'Black, \nnon,Hispanic',
+                                       "Other, \nnon-Hispanic", "Hispanic")),
+                y=factor(ambulatory),fill=avg))+ 
+  scale_fill_distiller("Average Home Value",palette="PuBuGn", labels=comma, direction=1)+
+  theme_minimal()+
+  labs(x="Race/Ethnicity", y="Presence of Ambulatory Disability")
+  
+
+```
+
+
+
+```{r, include=F}
+### Value of Home, Income, and Quality of Life for People with Ambulatory Disabilities
+
+#data management
+sub_scatter <- sub[sub$ambulatory==1 & sub$home >0 & sub$income > 0 ,]
+sub_scatter$income <- as.numeric(sub_scatter$income)
+sub_scatter$home <- as.numeric(sub_scatter$home)
+sub_scatter$qualityoflife <- as.numeric(sub_scatter$qualityoflife)
+
+ggplot(sub_scatter)+
+  geom_point(aes(x=home, y=income, color=qualityoflife), na.rm=T)+
+  geom_smooth(aes(x=home, y=income), na.rm=T, se=F, method="lm", color="grey")+
+  theme_minimal()+
+  scale_color_distiller("Quality of Life", limits=c(0, 15), breaks=seq(0, 15, by=5), palette="PuBuGn", direction=1)+
+  labs(x="Value of Home (USD)", y="Total Income (USD)")+
+  scale_y_continuous(labels=label_comma(), limits = c(0,750000))+
+  scale_x_continuous(labels=label_comma())+
+  xlim(0,1000000)
+
+```
+
